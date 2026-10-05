@@ -1,0 +1,7 @@
+requests
+python-dotenv
+websockets
+pyaudio
+google-genai
+edge-tts
+pygame
