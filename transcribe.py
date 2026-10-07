@@ -1,13 +1,11 @@
+from dotenv import load_dotenv
 import os
 import json
 import asyncio
 import sys
 import pyaudio
 import websockets
-# pyrefly: ignore [missing-import]
-from dotenv import load_dotenv
-from llm import generate_response
-from tts import play_text
+from llm import send_transcript_to_chat
 
 load_dotenv()
 
@@ -161,9 +159,10 @@ def transcribe_wav(file_path: str):
 if __name__ == "__main__":
     transcript = asyncio.run(transcribe_live_websocket())
     
-    # if transcript:
-    #     prompt = f"You are an AI software engineering interviewer. The candidate said: '{transcript}'. How do you respond briefly?"
-    #     llm_response = generate_response(prompt)
-    #     if llm_response:
-    #         play_text(llm_response)
+    if transcript:
+        print("\nSending transcript to persistent Gemini chat session...")
+        send_transcript_to_chat(transcript)
+
+
+
 

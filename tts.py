@@ -1,47 +1,101 @@
 import asyncio
+import os
+import re
+import sys
+import tempfile
+import uuid
 # pyrefly: ignore [missing-import]
 import edge_tts
 # pyrefly: ignore [missing-import]
 import pygame
-import os
 
-# Default voice, can be changed. "en-US-GuyNeural" is a good male voice, "en-US-JennyNeural" is a good female voice.
 VOICE = "en-US-GuyNeural"
-OUTPUT_FILE = "response.mp3"
+os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
 
-async def _generate_and_play(text: str):
-    print(f"\nGenerating TTS...")
-    communicate = edge_tts.Communicate(text, VOICE)
-    
-    # Save the generated audio to an MP3 file
-    await communicate.save(OUTPUT_FILE)
-    
-    print("Playing TTS...")
-    # Initialize pygame mixer and play the file
-    pygame.mixer.init()
-    pygame.mixer.music.load(OUTPUT_FILE)
-    pygame.mixer.music.play()
-    
-    # Wait until the audio finishes playing
-    while pygame.mixer.music.get_busy():
-        pygame.time.Clock().tick(10)
-        
-    pygame.mixer.quit()
-    
-    # Clean up the audio file after playing
-    if os.path.exists(OUTPUT_FILE):
-        try:
-            os.remove(OUTPUT_FILE)
-        except Exception as e:
-            print(f"Warning: Could not remove {OUTPUT_FILE}: {e}")
 
-def play_text(text: str):
+def extract_sentences(buffer: str):
     """
-    Synchronous wrapper to generate and play TTS audio using edge-tts and pygame.
+    Extracts complete sentences ending with '.', '!', '?', or newline from buffer.
+    Returns (list_of_completed_sentences, remaining_incomplete_buffer).
     """
-    # Disable pygame's welcome prompt
-    os.environ['PYGAME_HIDE_SUPPORT_PROMPT'] = "hide"
-    asyncio.run(_generate_and_play(text))
+    parts = re.split(r'(?<=[.!?\n])\s+', buffer)
+    if len(parts) > 1:
+        sentences = [p.strip() for p in parts[:-1] if p.strip()]
+        remaining = parts[-1]
+        return sentences, remaining
+    return [], buffer
 
-if __name__ == "__main__":
-    play_text("Hello! This is a test of the Edge TTS integration. I am ready to conduct the interview.")
+
+async def play_sentence_audio(text: str):
+    """
+    Generates and plays TTS audio for a single sentence chunk in real-time.
+    Strips markdown formatting symbols so voice synthesis sounds natural.
+    """
+    clean_text = re.sub(r'[*#_`~]', '', text).strip()
+    if not clean_text:
+        return
+
+    temp_file = os.path.join(tempfile.gettempdir(), f"tts_{uuid.uuid4().hex}.mp3")
+    try:
+        communicate = edge_tts.Communicate(clean_text, VOICE)
+        await communicate.save(temp_file)
+
+        if not pygame.mixer.get_init():
+            pygame.mixer.init()
+
+        pygame.mixer.music.load(temp_file)
+        pygame.mixer.music.play()
+
+        while pygame.mixer.music.get_busy():
+            await asyncio.sleep(0.05)
+    except Exception as e:
+        print(f"\nTTS Error: {e}")
+    finally:
+        if pygame.mixer.get_init():
+            try:
+                pygame.mixer.music.unload()
+            except Exception:
+                pass
+        if os.path.exists(temp_file):
+            try:
+                os.remove(temp_file)
+            except Exception:
+                pass
+
+
+async def stream_tts_from_generator(chunk_generator):
+    """
+    Streams text chunks from Gemini generator, buffers into sentences,
+    and plays TTS audio sentence-by-sentence in real time.
+    """
+    buffer = ""
+    full_text = []
+
+    print("\n--- Gemini Streaming Response (Voice Active) ---")
+    for chunk in chunk_generator:
+        if not chunk:
+            continue
+
+        sys.stdout.write(chunk)
+        sys.stdout.flush()
+
+        full_text.append(chunk)
+        buffer += chunk
+
+        sentences, buffer = extract_sentences(buffer)
+        for sentence in sentences:
+            await play_sentence_audio(sentence)
+
+    # Flush remaining text in buffer if any
+    if buffer.strip():
+        await play_sentence_audio(buffer.strip())
+
+    print("\n------------------------------------------------\n")
+    return "".join(full_text)
+
+
+def play_stream(chunk_generator) -> str:
+    """
+    Synchronous wrapper to stream text chunks to real-time speech.
+    """
+    return asyncio.run(stream_tts_from_generator(chunk_generator))
